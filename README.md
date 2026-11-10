@@ -1,148 +1,123 @@
-# NIC Doctor v1.0.7
+# NIC Doctor v1.1.0
 
-Linux network interface discovery, PCIe/NUMA topology, IRQ/CPU mapping, diagnostics, and guarded configuration.
+Topology-aware Linux NIC diagnostics, problem-oriented checks, and guarded configuration.
+
+Copyright (C) 2026 Maxim Lyadvinsky. Licensed under GNU GPL version 3 or later.
 
 ## Requirements
 
-- Linux with Python 3.9 or later (standard library only).
-- Optional system utilities: `ethtool`, `ip`, `lspci`, `systemctl`.
-- Root privileges for installation, configuration changes, rollback, and removal.
+- Linux, Python 3.9+ (standard library only).
+- Optional utilities: `ethtool`, `ip`, `lspci`, `systemctl`.
+- Root for installation, configuration changes, rollback, and removal.
 
-## Install
+## Installation
 
-`nic-doctor.sh` contains the complete application and can run without installation.
+`nic-doctor.sh` is the complete executable and installer. It runs without installation or access to `src/`.
 
 ```sh
-./nic-doctor.sh --version
-./nic-doctor.sh topology
+./nic-doctor.sh status
 sudo ./nic-doctor.sh install
-nic-doctor
+nic-doctor --version
 ```
 
-For a custom installation prefix:
+The install prefix can be changed with `--prefix /path`. To uninstall, use `sudo nic-doctor remove`. Saved transactions under `/var/lib/nic-doctor` are not deleted by removal.
+
+## Quick start
 
 ```sh
-sudo ./nic-doctor.sh install --prefix /opt/nic-tools
-/opt/nic-tools/bin/nic-doctor topology
+nic-doctor                         # Help
+nic-doctor status                  # Concise inventory (PCI NICs by default)
+nic-doctor check                   # Check all PCI NICs, one sampled interval
+nic-doctor check eth0 --duration 15
+nic-doctor check eth0 --focus loss
+nic-doctor check --json
+nic-doctor explain eth0            # Packet path and mapping evidence
+nic-doctor optimize                # Preview IRQ placement for all PCI NICs
+nic-doctor optimize eth0 --goal max-pps
+nic-doctor optimize eth0 --avoid-cpus 0-7
+nic-doctor optimize eth0 --profile-out profile.json
+nic-doctor topology                # Merged NUMA/PCIe hardware tree
 ```
 
-The installer copies the script to `PREFIX/bin/nic-doctor` and records its checksum in `PREFIX/lib/nic-doctor/install.json`. It verifies an existing installation before overwriting it.
+When no PCI-backed interfaces exist, `status`, `check`, and `optimize` fall back to non-loopback interfaces. Use `--all` to include all network interfaces, including virtual interfaces and loopback.
 
-To uninstall:
+## Problem-oriented commands
 
-```sh
-sudo nic-doctor remove
-```
+### `status [DEVICE]`
 
-Removal preserves NIC configuration and saved state in `/var/lib/nic-doctor`. To reverse a configuration transaction, run `sudo nic-doctor rollback` before removal.
+Shows interface, driver, link state, negotiated NIC speed, NUMA, channel count, and RX/TX queue counts without sampling traffic. It does **not** infer that packets are being delivered correctly just because the link is up.
+
+### `check [DEVICE]`
+
+Reports actionable findings with severity, supporting evidence, explanation, recommended next step, and confidence. Checks include:
+
+- PCIe link negotiated below endpoint capability (potential limitation, not proof of saturation).
+- RSS table references outside the current combined-channel range; uneven indirection weights are informational, not equivalent to traffic skew.
+- NIC-local NUMA versus IRQ effective CPU affinity.
+- Multiple channel-labelled IRQs sharing physical cores while other local cores are unused.
+- Increasing standard and driver-specific drop/error counters over a single shared measurement interval.
+- Missing or ambiguous mapping information, without guessing IRQ-to-queue relationships.
+
+`--focus` accepts `all`, `loss`, `rss`, `placement`, `pcie`, or `link`. `--duration 0` disables counter-delta sampling. `--strict` exits with status 2 if the report contains warnings. `--json` writes machine-readable findings.
+
+Counters are not added across different scopes. Only nonnegative deltas are used. A zero delta is **not** proof that upstream packet loss is absent. Counter sampling cannot establish the throughput or PPS capacity of a device without a controlled workload.
+
+### `explain DEVICE`
+
+Shows PCIe ancestry, NUMA locality, NIC RX/TX queues, RSS indirection weights, channel-labelled PCI MSI-X vectors and their effective CPU affinities, and XDP attachment state (where reported). Channel labels do not independently prove queue/NAPI/IRQ identity.
+
+### `optimize [DEVICE]`
+
+Plans **only IRQ CPU placement**. It selects NUMA-local online physical cores, uses one distinct physical core per completion IRQ where possible, preserves already valid mappings, and avoids cores assigned to other known NIC completion IRQs for a single-device plan. It refuses plans with unproven channel/IRQ association, missing NUMA/core information, or insufficient eligible physical cores.
+
+| Option | Purpose |
+| --- | --- |
+| `--goal balanced\|max-pps\|max-throughput\|low-latency\|cpu-efficient` | Intent label; no performance gain is asserted without measurements. |
+| `--cpus 4-11` | Explicit ordered CPU selection, overriding automatic NUMA placement. |
+| `--avoid-cpus 0-3` | Reserve CPUs from automatic placement. |
+| `--allow-smt` | Permit SMT siblings only when physical cores are insufficient. |
+| `--profile-out profile.json` | Save the plan as an existing JSON `profile` configuration. |
+| `--json` | Structured plan. |
+| `--apply` | Perform supported IRQ-affinity changes after validation, transaction journaling and verification. |
+| `--allow-irqbalance` | Explicitly acknowledge active irqbalance when applying. |
+
+Use `nic-doctor optimize` without `--apply` first. Any blocked device prevents a multi-device apply rather than allowing partial changes. Plans intentionally do not resize queues, rebalance RSS, disable RPS, or change offloads.
+
+**Remote safety:** IRQ affinity writes can affect a management interface. This release has no independent connectivity watchdog or boot persistence. Use out-of-band access for potentially disruptive remote operations. The existing transaction mechanism attempts rollback if a write or verification fails while the process is running, and records configuration state for manual `sudo nic-doctor rollback`.
+
+## Additional commands
+
+| Command | Purpose |
+| --- | --- |
+| `list`, `show [DEVICE]` | Device inventory and detailed information. |
+| `topology [--view hardware\|network\|cpu\|datapath]` | Merged Unicode tree; JSON and DOT exports. |
+| `cpu-map DEVICE` | IRQ labels, effective/configured CPU affinity, interrupt counts. |
+| `rss DEVICE`, `channels DEVICE` | Inspect or change hardware queues and RSS (guarded). |
+| `pin DEVICE`, `rps DEVICE`, `xps DEVICE` | Low-level steering and IRQ configuration. |
+| `stats DEVICE`, `watch DEVICE`, `diagnose DEVICE` | Counters, sampling, and previous diagnostic report. |
+| `snapshot`, `diff` | Capture and compare host state. |
+| `profile plan\|apply\|verify FILE` | Plan, apply, and verify a JSON profile. |
+| `rollback [ID]` | Restore an earlier journaled transaction. |
+| `help [COMMAND]`, `remove` | CLI help and uninstall. |
+
+Low-level mutating commands default to dry run and require `--apply`. Channel and RSS modifications also require `--accept-disruption`.
 
 ## Build and test
 
-The prebuilt `nic-doctor.sh` is included in the source archive.
+The source archive includes the prebuilt script and a readable source tree; no examples directory is included.
 
 ```sh
 ./build.sh
 python3 -m unittest discover -s tests -v
 ```
 
-`build.sh` combines `src/*.py` in a fixed order, checks Python syntax, and creates a deterministic standalone shell script containing a compressed Python payload. The generated program does not require the source tree at runtime.
-
-## Commands
-
-| Command | Description |
-| --- | --- |
-| `list` | List network interfaces. |
-| `show [DEVICE]` | Display interface details; defaults to all interfaces. |
-| `topology` | Merged hardware, network, CPU/IRQ, or datapath tree. |
-| `cpu-map DEVICE` | Show device IRQ affinity and channel-label hints. |
-| `rss DEVICE` | Inspect RSS indirection; optionally rebalance it. |
-| `channels DEVICE` | Inspect or configure combined hardware channels. |
-| `pin DEVICE` | Assign known channel IRQs to CPUs. |
-| `rps DEVICE`, `xps DEVICE` | Inspect or configure software queue steering. |
-| `stats DEVICE`, `watch DEVICE` | Read counters or monitor counter deltas. |
-| `diagnose DEVICE` | Check RSS, IRQ locality, and counter anomalies. |
-| `snapshot`, `diff` | Save and compare NIC state. |
-| `profile` | Plan, apply, or verify JSON configuration. |
-| `rollback` | Restore the most recent applicable configuration transaction. |
-| `remove` | Uninstall the CLI. |
-
-Run `nic-doctor help` or `nic-doctor help COMMAND` for full usage. Running `nic-doctor` without arguments displays help.
-
-```sh
-nic-doctor list
-nic-doctor show
-nic-doctor show eth0
-nic-doctor show 'en*'
-nic-doctor topology
-nic-doctor topology --device eth0
-nic-doctor topology --view cpu
-nic-doctor topology --view datapath
-nic-doctor topology --json
-nic-doctor topology --format dot > topology.dot
-nic-doctor cpu-map eth0
-nic-doctor stats eth0 --all
-nic-doctor diagnose eth0 --duration 15
-nic-doctor snapshot save before.json --device eth0 --full
-nic-doctor diff before.json
-```
-
-Quote wildcard selectors to prevent shell expansion. Device names are discovered using `nic-doctor list`.
-
-## Hardware topology
-
-`topology` merges interfaces by NUMA node, PCI domain, and shared PCI ancestry. Devices without a PCI parent appear in a separate group.
-
-```text
-NIC Doctor  |  TOPOLOGY
-Interfaces 3  |  PCI functions 2
-
-HARDWARE TREE
-Network
-├─ NUMA node 0 [local CPUs 0-7]
-│  └─ PCI domain 0000
-│     └─ 00:01.0 — PCIe bridge [Gen3 x8]
-│        ├─ 03:00.0 — Network controller
-│        │  └─ enp3s0f0 [ixgbe; 10 Gb/s; up; RXQ 4 / TXQ 4]
-│        └─ 03:00.1 — Network controller
-│           └─ enp3s0f1 [ixgbe; 10 Gb/s; up; RXQ 4 / TXQ 4]
-└─ Non-PCI interfaces (virtual, USB or other)
-   └─ lo
-```
-
-PCIe speed, width, NUMA and queue values are read from the host. IRQ channel indices inferred from driver labels are hints, not verified NAPI-to-queue associations.
-
-## Configuration
-
-Commands that change NIC state require `--apply` and root privileges. Channel count and RSS modifications also require `--accept-disruption`.
-
-```sh
-nic-doctor pin eth0 --cpus 0-3
-sudo nic-doctor pin eth0 --cpus 0-3 --apply
-nic-doctor channels eth0 --combined 4
-sudo nic-doctor channels eth0 --combined 4 --apply --accept-disruption
-nic-doctor rss eth0 --rebalance --queues 0-3
-nic-doctor rps eth0 --disable
-nic-doctor xps eth0 --cpus 0-3
-```
-
-CPU pinning rejects ambiguous IRQ mappings. If `irqbalance` is active, pinning requires `--allow-irqbalance`. RSS changes require a representable original indirection table so rollback can restore its layout. A channel-count change may recreate IRQs: apply it separately before IRQ/RSS configuration.
-
-Profiles are JSON files containing a `devices` object. Supported sections are `channels`, `irq`, `rss`, `rps`, and `xps`.
-
-```sh
-nic-doctor profile plan profile.json
-sudo nic-doctor profile apply profile.json --accept-disruption
-nic-doctor profile verify profile.json
-sudo nic-doctor rollback
-```
+The build is deterministic. `tools/build.py` verifies the Python payload, compresses it and embeds it inside the single executable `nic-doctor.sh`; the embedded program checks a SHA-256 digest at runtime. No `nic-doctor` companion executable or runtime source directory is required.
 
 ## Limitations
 
-- Driver-specific NAPI-to-queue mapping may not be identifiable from the available kernel interfaces.
-- Configuration changes are not persisted across resets or restarts by this release.
-- Remote-host and switch-side statistics are not included in packet-loss analysis.
-- Hardware/firmware may change NIC state after verification.
-
-## Copyright and license
-
-Copyright (C) 2026 Maxim Lyadvinsky. Licensed under the GNU General Public License v3 or later; see `LICENSE`.
+- A channel-labelled IRQ is not a verified NAPI/queue identity. Unlabelled or ambiguous devices may be rejected by the optimizer.
+- Automatically inferred optimal channel counts, RSS distributions, coalescing settings, and application performance are not supported.
+- Collector coverage depends on driver, kernel and installed utilities. Some NICs lack RSS data or expose physical-port counters shared by multiple interfaces.
+- Counter deltas from the receiver alone cannot explain packets lost before reaching the receiver MAC.
+- Configuration is not automatically made persistent across driver reset or reboot.
+- Physical ConnectX/Intel/Broadcom hardware tuning has not yet been validated for this release.

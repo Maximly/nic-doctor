@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ['common.py', 'discovery.py', 'topology.py', 'tuning.py', 'cli.py']
+SOURCES = ['common.py', 'discovery.py', 'topology.py', 'tuning.py', 'analysis.py', 'cli.py']
 n = type(sys)('nic_doctor')
 n.__file__ = str(ROOT / 'nic-doctor.sh')
 source = '\n'.join((ROOT / 'src' / name).read_text() for name in SOURCES)

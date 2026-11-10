@@ -9,6 +9,10 @@ def parser_build():
     def apply(q,disrupt=False):
         q.add_argument('--apply',action='store_true',help='actually change the system; default is dry run')
         if disrupt: q.add_argument('--accept-disruption',action='store_true',help='acknowledge potential traffic disruption')
+    q=cmd('status','concise NIC inventory; no traffic sampling');q.add_argument('device',nargs='?');q.add_argument('--all',action='store_true',help='include virtual/loopback interfaces');j(q)
+    q=cmd('check','check NIC topology, IRQs, RSS and sampled drop counters');q.add_argument('device',nargs='?');q.add_argument('--duration',type=float,default=1.0,help='sample time in seconds, 0 disables delta sampling');q.add_argument('--focus',choices=['all','loss','rss','placement','pcie','link'],default='all');q.add_argument('--all',action='store_true');q.add_argument('--strict',action='store_true',help='exit 2 if warnings are detected');j(q)
+    q=cmd('explain','explain the observed packet path for an interface');q.add_argument('device');j(q)
+    q=cmd('optimize','preview NUMA/physical-core-aware IRQ affinity mapping');q.add_argument('device',nargs='?');q.add_argument('--goal',choices=['balanced','max-pps','max-throughput','low-latency','cpu-efficient'],default='balanced');q.add_argument('--cpus',help='explicit ordered IRQ CPU list');q.add_argument('--avoid-cpus',help='exclude CPU list from automatic placement');q.add_argument('--allow-smt',action='store_true',help='permit SMT sibling CPU sharing if required');q.add_argument('--all',action='store_true');q.add_argument('--allow-irqbalance',action='store_true');q.add_argument('--profile-out',metavar='FILE',help='write a compatible, explicit JSON IRQ profile');apply(q);j(q)
     q=cmd('list','enumerate Linux NICs'); j(q)
     q=cmd('show','interface details; omit device to show all, or use quoted glob');q.add_argument('devices',nargs='*',metavar='DEVICE');j(q)
     q=cmd('help','show general help or help for a specific command');q.add_argument('topic',nargs='?',metavar='COMMAND')
@@ -48,7 +52,42 @@ def main(argv=None, system=None):
     if a.command == 'remove': remove_install();return 0
     if sys.platform != 'linux': raise DoctorError('NIC Doctor supports Linux only')
     s=system or System()
-    if a.command == 'list':
+    if a.command == 'status':
+        data=status_report(s,a.device,a.all)
+        if a.json: out_json(data)
+        else: print_status(data)
+    elif a.command == 'check':
+        data=check_report(s,a.device,a.duration,a.focus,a.all)
+        if a.json: out_json(data)
+        else: print_findings(data)
+        if a.strict and any(item['severity']=='warning' for item in data['findings']):
+            return 2
+    elif a.command == 'explain':
+        data=explain_report(s,a.device)
+        if a.json: out_json(data)
+        else: print_explain(data)
+    elif a.command == 'optimize':
+        cpus=parse_cpulist(a.cpus) if a.cpus else None
+        avoid=parse_cpulist(a.avoid_cpus) if a.avoid_cpus else None
+        data=optimize_report(s,a.device,a.goal,cpus,avoid,a.allow_smt,a.all)
+        blocked=[item for item in data['plans'] if item['status']=='blocked']
+        if a.profile_out:
+            if blocked:raise DoctorError('cannot write profile with blocked devices; inspect optimize output first')
+            obj={'devices':{item['device']:{'irq':{'cpus':cpulist(item['selected_cpus']),'strategy':'one-per-queue'}}
+                            for item in data['plans'] if item['selected_cpus']}}
+            if not obj['devices']:raise DoctorError('no usable CPU mappings for profile')
+            Path(a.profile_out).write_text(json.dumps(obj,indent=2,sort_keys=True)+'\n')
+        if a.json: out_json(data)
+        else: print_optimize(data)
+        if a.apply:
+            if blocked:raise DoctorError('refusing partial apply: one or more device plans are blocked')
+            if irqbalance_active() and not a.allow_irqbalance:
+                raise DoctorError('irqbalance is active; stop/configure it or supply --allow-irqbalance')
+            actions=[action for item in data['plans'] for action in item['changes']]
+            transaction(s,actions,'optimize: '+a.goal)
+        elif blocked:
+            return 2
+    elif a.command == 'list':
         data=[s.if_info(d) for d in s.devices()]
         if a.json:out_json(data)
         else:

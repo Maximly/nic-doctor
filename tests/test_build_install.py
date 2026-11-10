@@ -22,7 +22,7 @@ class PackagingTests(unittest.TestCase):
         for args, needle in (([], 'usage: nic-doctor'),
                              (['--help'], 'usage: nic-doctor'),
                              (['help','topology'], '--view'),
-                             (['--version'], '1.0.7'),
+                             (['--version'], '1.1.0'),
                              (['topology'], 'HARDWARE TREE')):
             p=subprocess.run([str(SCRIPT), *args],capture_output=True,text=True)
             self.assertEqual(p.returncode,0,p.stderr)
@@ -38,7 +38,7 @@ class PackagingTests(unittest.TestCase):
         self.assertIn('Version 3, 29 June 2007',(ROOT/'LICENSE').read_text())
         self.assertIn('END OF TERMS AND CONDITIONS',SCRIPT.read_text())
         self.assertIn('SPDX-License-Identifier: GPL-3.0-or-later',SCRIPT.read_text().split('set -eu',1)[0])
-        for name in ('common.py','discovery.py','topology.py','tuning.py','cli.py'):
+        for name in ('common.py','discovery.py','topology.py','tuning.py','analysis.py','cli.py'):
             self.assertIn('Copyright (C) 2026 Maxim Lyadvinsky','\n'.join((ROOT/'src'/name).read_text().splitlines()[:8]))
 
     def test_build_reproducible_and_sources_match_embedded(self):
@@ -46,7 +46,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(before.count(MARKER),1)
         encoded=b''.join(before.split(MARKER)[1].split())
         actual=gzip.decompress(base64.b64decode(encoded,validate=True))
-        names=['common.py','discovery.py','topology.py','tuning.py','cli.py']
+        names=['common.py','discovery.py','topology.py','tuning.py','analysis.py','cli.py']
         expected=b'\n'.join((ROOT/'src'/f).read_bytes().rstrip(b'\n')+b'\n' for f in names)
         self.assertEqual(actual,expected)
         self.assertEqual(subprocess.run([str(ROOT/'build.sh')],capture_output=True,text=True).returncode,0)
@@ -65,7 +65,7 @@ class PackagingTests(unittest.TestCase):
             with subprocess.Popen([str(exe),'--version'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) as proc:
                 stdout,stderr=proc.communicate(timeout=10)
                 self.assertEqual(proc.returncode,0,stderr)
-                self.assertIn('1.0.7',stdout)
+                self.assertIn('1.1.0',stdout)
             install2=subprocess.run(cmd,text=True,capture_output=True)
             self.assertEqual(install2.returncode,0,install2.stderr)
             remove=subprocess.run([str(exe),'remove'],text=True,capture_output=True)
@@ -94,7 +94,7 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual(exe.read_bytes(),SCRIPT.read_bytes())
             version=subprocess.run([str(exe),'--version'],text=True,capture_output=True)
             self.assertEqual(version.returncode,0,version.stderr)
-            self.assertIn('1.0.7',version.stdout)
+            self.assertIn('1.1.0',version.stdout)
             removed=subprocess.run([str(exe),'remove'],text=True,capture_output=True)
             self.assertEqual(removed.returncode,0,removed.stderr)
 

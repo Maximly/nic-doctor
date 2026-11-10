@@ -1,34 +1,28 @@
 # Architecture
 
 ```text
-nic-doctor-v1.0.7/
-├── nic-doctor.sh           # Prebuilt CLI and installer
-├── build.sh                # Build entry point
+nic-doctor-v1.1.0/
+├── nic-doctor.sh          # Prebuilt standalone CLI and installer
+├── build.sh
 ├── src/
-│   ├── common.py           # Shared utilities and parsers
-│   ├── discovery.py        # Sysfs, procfs, ethtool discovery
-│   ├── topology.py         # Topology model and output formatting
-│   ├── tuning.py           # Configuration, transactions, rollback
-│   └── cli.py              # Command definitions and dispatch
-├── tools/
-│   └── build.py            # Standalone script generator
-├── tests/                  # Unit and integration tests
-├── README.md
-└── LICENSE
+│   ├── common.py         # Shared types, parsers and command helpers
+│   ├── discovery.py      # Sysfs, procfs and ethtool NIC discovery
+│   ├── topology.py       # Tree structure and output presentation
+│   ├── tuning.py         # Plans, guarded changes, journal and rollback
+│   ├── analysis.py       # Evidence-based checks and CPU placement
+│   └── cli.py            # Commands and argument parsing
+├── tools/build.py        # Deterministic embedded-payload builder
+├── tests/
+├── LICENSE
+└── README.md
 ```
 
-## Build
+## Runtime
 
-`tools/build.py` combines the five source files in dependency order, validates the combined Python program, then compresses and embeds it into `nic-doctor.sh`. A SHA-256 digest verifies the embedded payload at runtime. Source extraction is not required.
+NIC data is read from sysfs, procfs and optional system commands. Inventory and sampled counters are collected separately. `check` evaluates observed state with bounded rules that preserve source and scope, instead of treating all counters as directly additive. Reports are available in text and JSON.
 
-## Installation
+The CPU planner requires a demonstrable channel-labelled PCI MSI-X set, available NUMA locality and physical CPU topology. It does not assume that IRQs, NAPI instances and queues have a universal one-to-one mapping. Configuration writes are journaled and verified by the existing transaction subsystem.
 
-`nic-doctor.sh install` installs a copy of the script under the selected prefix. The installation manifest stores the installed path, version, and SHA-256. Upgrade and removal verify the manifest and installed file before changing files.
+## Build and install
 
-## Discovery
-
-Hardware and interface metadata come from sysfs and procfs. Optional commands supply additional link, driver and queue information. PCIe topology is assembled from actual device ancestry, grouped by NUMA node and PCI domain.
-
-## Configuration
-
-Changes use explicit plans and transactions under `/var/lib/nic-doctor`. Supported actions include sysfs and procfs writes, ethtool channel changes, and representable RSS-table changes. Each action records its previous state for rollback and verifies the applied state when possible.
+`tools/build.py` combines source files in dependency order into a checked, compressed Python payload, embedded in `nic-doctor.sh` with a SHA-256 digest. The shell script invokes Python from its own payload without extracting files. Installation copies the same script to the chosen prefix and stores its checksum in an installation manifest. `nic-doctor remove` validates this manifest before removal.

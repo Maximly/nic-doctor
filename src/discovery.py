@@ -141,6 +141,8 @@ class System:
         for item in items:
             idx = item['channel_index_hint']
             if idx is not None:
+                if not item['pci_member']:
+                    raise DoctorError(f'IRQ {item["irq"]} has a matching interface label but is not in the NIC PCI MSI-X set')
                 if idx in by:
                     raise DoctorError(f'ambiguous duplicate channel-labelled IRQ {idx} on {dev}; use --irqs')
                 by[idx] = item

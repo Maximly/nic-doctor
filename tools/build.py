@@ -11,7 +11,7 @@ import re
 import textwrap
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ['common.py', 'discovery.py', 'topology.py', 'tuning.py', 'cli.py']
+SOURCES = ['common.py', 'discovery.py', 'topology.py', 'tuning.py', 'analysis.py', 'cli.py']
 parts = [(ROOT/'src'/name).read_bytes().rstrip(b'\n') + b'\n' for name in SOURCES]
 payload = b'\n'.join(parts)
 compile(payload, 'nic-doctor (embedded)', 'exec')
