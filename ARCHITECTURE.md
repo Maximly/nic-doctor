@@ -1,7 +1,7 @@
 # Architecture
 
 ```text
-nic-doctor-v1.1.0/
+nic-doctor-v1.1.1/
 ├── nic-doctor.sh          # Prebuilt standalone CLI and installer
 ├── build.sh
 ├── src/

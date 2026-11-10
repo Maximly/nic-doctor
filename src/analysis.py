@@ -43,7 +43,53 @@ def numeric_link(speed):
     return float(m.group(1)) if m else None
 
 
-def collect_state(system, devices, sample_seconds=0, vendors=False):
+def traffic_rates(deltas, elapsed, preference='auto'):
+    """Select one accounting domain per direction, never sum overlapping domains."""
+    if preference not in ('auto', 'phy', 'vport', 'netdev'):
+        raise DoctorError('invalid traffic counter source')
+    result = {}
+    for direction in ('rx', 'tx'):
+        sources = {
+            'phy': ('PHY (port)', f'ethtool/{direction}_packets_phy', f'ethtool/{direction}_bytes_phy'),
+            'netdev': ('netdev (host)', f'{direction}_packets', f'{direction}_bytes'),
+        }
+        vp = f'ethtool/{direction}_vport_'
+        kinds = ('unicast', 'multicast', 'broadcast')
+        vport_packets = [vp + kind + '_packets' for kind in kinds]
+        vport_bytes = [vp + kind + '_bytes' for kind in kinds]
+        if all(k in deltas for k in vport_packets + vport_bytes):
+            sources['vport'] = ('vPort (PF)', sum(deltas[k] for k in vport_packets),
+                                sum(deltas[k] for k in vport_bytes))
+        chosen = None
+        sequence = ('phy', 'vport', 'netdev') if preference == 'auto' else (preference,)
+        for name in sequence:
+            if name not in sources:
+                continue
+            label, packets_key, bytes_key = sources[name]
+            packets = deltas.get(packets_key) if isinstance(packets_key, str) else packets_key
+            bytes_ = deltas.get(bytes_key) if isinstance(bytes_key, str) else bytes_key
+            if packets is not None or bytes_ is not None:
+                chosen = (label, packets, bytes_)
+                break
+        label, packets, bytes_ = chosen if chosen else (None, None, None)
+        result[direction + '_source'] = label
+        result[direction + '_pps'] = packets / elapsed if packets is not None and elapsed > 0 else None
+        result[direction + '_bps'] = bytes_ * 8 / elapsed if bytes_ is not None and elapsed > 0 else None
+        result[direction + '_mpps'] = round(result[direction + '_pps'] / 1e6, 6) if result[direction + '_pps'] is not None else None
+        result[direction + '_gbps'] = round(result[direction + '_bps'] / 1e9, 6) if result[direction + '_bps'] is not None else None
+    return result
+
+
+def human_rate(value, suffix):
+    if value is None:
+        return '-'
+    for size, prefix in ((1e9, 'G'), (1e6, 'M'), (1e3, 'k')):
+        if value >= size:
+            return f'{value / size:.3f} {prefix}{suffix}'
+    return f'{value:.2f} {suffix}'
+
+
+def collect_state(system, devices, sample_seconds=0, vendors=False, traffic_source='auto'):
     if not (0 <= sample_seconds <= 300):
         raise DoctorError('sample duration must be within 0..300 seconds')
     state = {}
@@ -67,14 +113,7 @@ def collect_state(system, devices, sample_seconds=0, vendors=False):
         item['counter_deltas'] = {k:end[k]-v for k,v in start.items()
                                   if k in end and end[k] >= v}
         item['reset_counters'] = sorted(k for k,v in start.items() if k in end and end[k]<v)
-        if elapsed > 0:
-            d = item['counter_deltas']
-            item['rates'] = {'rx_mpps':round(d.get('rx_packets',0)/elapsed/1e6,6) if 'rx_packets' in d else None,
-                             'tx_mpps':round(d.get('tx_packets',0)/elapsed/1e6,6) if 'tx_packets' in d else None,
-                             'rx_gbps':round(d.get('rx_bytes',0)*8/elapsed/1e9,6) if 'rx_bytes' in d else None,
-                             'tx_gbps':round(d.get('tx_bytes',0)*8/elapsed/1e9,6) if 'tx_bytes' in d else None}
-        else:
-            item['rates'] = {'rx_mpps':None,'tx_mpps':None,'rx_gbps':None,'tx_gbps':None}
+        item['rates'] = traffic_rates(item['counter_deltas'], elapsed, traffic_source)
     return state, elapsed
 
 
@@ -162,6 +201,18 @@ def analyze_device(system, dev, item, elapsed, focus='all'):
             'Inspect nic-doctor cpu-map; pinning needs explicit unambiguous channel labels.', 'high')
 
     if elapsed > 0:
+        scope = []
+        for direction in ('rx', 'tx'):
+            physical = deltas.get(f'ethtool/{direction}_packets_phy', 0)
+            netdev = deltas.get(f'{direction}_packets')
+            if physical > 0 and netdev == 0:
+                scope.append(f'{direction.upper()}: physical +{physical}, netdev +0')
+        if scope:
+            add('traffic.accounting_domains', 'loss', 'info',
+                'Physical-port traffic absent from netdev counters',
+                '; '.join(scope),
+                'Physical NIC counters include traffic that Linux interface statistics may omit, including XDP processing. This does not establish packet loss.',
+                'Compare physical-port, vPort, and XDP action counters before interpreting traffic volume.', 'high')
         # Names are driver-specific; never sum per-port/PF/queue counters together.
         signals=[('ethtool/rx_out_of_buffer','rx.out_of_buffer','RX buffer exhaustion counter increased',
                   'A NIC/driver RX resource counter increased during sampling; its exact counter scope is driver-specific.',
@@ -202,16 +253,17 @@ def analyze_device(system, dev, item, elapsed, focus='all'):
     return out
 
 
-def check_report(system, requested=None, duration=1.0, focus='all', include_all=False):
+def check_report(system, requested=None, duration=1.0, focus='all', include_all=False, traffic_source='auto'):
     devs=relevant_devices(system,requested,include_all)
-    state,elapsed=collect_state(system,devs,duration,vendors=True)
+    state,elapsed=collect_state(system,devs,duration,vendors=True,traffic_source=traffic_source)
     findings=[]
     for dev in devs:
         findings.extend(analyze_device(system,dev,state[dev],elapsed,focus))
     findings.sort(key=lambda f:({'warning':0,'info':1}.get(f['severity'],2),f['device'],f['code']))
     return {'version':VERSION, 'sample_seconds':round(elapsed,3), 'devices':devs,
             'findings':findings, 'rates':{dev:state[dev]['rates'] for dev in devs},
-            'limitations':['Receiver-only counters cannot account for packets lost upstream of the receiver MAC.',
+            'limitations':['Counter source: PHY=physical port (may include traffic not attributable to this PF); vPort=PF; netdev=Linux host interface. Domains are not additive.',
+                           'Receiver-only counters cannot account for packets lost upstream of the receiver MAC.',
                            'Vendor counters may be port-wide or overlap other counters; deltas are not automatically additive.',
                            'IRQ labels are channel hints, not independently verified NAPI-to-queue mappings.']}
 
@@ -385,8 +437,12 @@ def print_findings(data):
         print(f'  Confidence: {item["confidence"]}\n')
     if data['rates']:
         print('MEASURED RATES (counter-derived)')
-        table([[dev]+[f'{rates[k]:.3f}' if rates[k] is not None else '-' for k in ('rx_mpps','tx_mpps','rx_gbps','tx_gbps')]
-               for dev,rates in data['rates'].items()], ['DEVICE','RX Mpps','TX Mpps','RX Gbps','TX Gbps'])
+        table([[dev, human_rate(rates['rx_pps'], 'pps'), human_rate(rates['tx_pps'], 'pps'),
+                human_rate(rates['rx_bps'], 'bps'), human_rate(rates['tx_bps'], 'bps'),
+                rates['rx_source'] if rates['rx_source']==rates['tx_source'] else
+                f"RX:{rates['rx_source'] or '-'} TX:{rates['tx_source'] or '-'}"]
+               for dev,rates in data['rates'].items()],
+              ['DEVICE','RX rate','TX rate','RX bandwidth','TX bandwidth','COUNTERS'])
         print()
     for text in data['limitations']:
         print('Note:',text)

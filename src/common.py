@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 Maxim Lyadvinsky
 # SPDX-License-Identifier: GPL-3.0-or-later
-# NIC_DOCTOR_RELEASE v1.1.0
+# NIC_DOCTOR_RELEASE v1.1.1
 """Linux network interface discovery, diagnostics, and configuration."""
 import argparse
 from contextlib import contextmanager
@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 AUTHOR = "Maxim Lyadvinsky"
 COPYRIGHT = "Copyright (C) 2026 Maxim Lyadvinsky"
 LICENSE_ID = "GPL-3.0-or-later"

@@ -1,4 +1,4 @@
-# NIC Doctor v1.1.0
+# NIC Doctor v1.1.1
 
 Topology-aware Linux NIC diagnostics, problem-oriented checks, and guarded configuration.
 
@@ -56,7 +56,10 @@ Reports actionable findings with severity, supporting evidence, explanation, rec
 - NIC-local NUMA versus IRQ effective CPU affinity.
 - Multiple channel-labelled IRQs sharing physical cores while other local cores are unused.
 - Increasing standard and driver-specific drop/error counters over a single shared measurement interval.
+- Traffic rate source selection: physical-port counters (preferred, port-wide), complete vPort counters, or standard netdev counters; the active source is reported.
 - Missing or ambiguous mapping information, without guessing IRQ-to-queue relationships.
+
+`--traffic-source auto|phy|vport|netdev` selects the rate-counter domain (default `auto`). For mlx5/XDP traffic, PHY counters can increase while netdev counters stay at zero. The `watch` command accepts the same option. A PHY rate measures a physical port, not necessarily traffic delivered to a particular PF or XDP program.
 
 `--focus` accepts `all`, `loss`, `rss`, `placement`, `pcie`, or `link`. `--duration 0` disables counter-delta sampling. `--strict` exits with status 2 if the report contains warnings. `--json` writes machine-readable findings.
 

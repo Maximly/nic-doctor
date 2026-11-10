@@ -22,7 +22,7 @@ class PackagingTests(unittest.TestCase):
         for args, needle in (([], 'usage: nic-doctor'),
                              (['--help'], 'usage: nic-doctor'),
                              (['help','topology'], '--view'),
-                             (['--version'], '1.1.0'),
+                             (['--version'], '1.1.1'),
                              (['topology'], 'HARDWARE TREE')):
             p=subprocess.run([str(SCRIPT), *args],capture_output=True,text=True)
             self.assertEqual(p.returncode,0,p.stderr)
@@ -65,7 +65,7 @@ class PackagingTests(unittest.TestCase):
             with subprocess.Popen([str(exe),'--version'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) as proc:
                 stdout,stderr=proc.communicate(timeout=10)
                 self.assertEqual(proc.returncode,0,stderr)
-                self.assertIn('1.1.0',stdout)
+                self.assertIn('1.1.1',stdout)
             install2=subprocess.run(cmd,text=True,capture_output=True)
             self.assertEqual(install2.returncode,0,install2.stderr)
             remove=subprocess.run([str(exe),'remove'],text=True,capture_output=True)
@@ -94,7 +94,7 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual(exe.read_bytes(),SCRIPT.read_bytes())
             version=subprocess.run([str(exe),'--version'],text=True,capture_output=True)
             self.assertEqual(version.returncode,0,version.stderr)
-            self.assertIn('1.1.0',version.stdout)
+            self.assertIn('1.1.1',version.stdout)
             removed=subprocess.run([str(exe),'remove'],text=True,capture_output=True)
             self.assertEqual(removed.returncode,0,removed.stderr)
 

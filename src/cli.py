@@ -10,7 +10,7 @@ def parser_build():
         q.add_argument('--apply',action='store_true',help='actually change the system; default is dry run')
         if disrupt: q.add_argument('--accept-disruption',action='store_true',help='acknowledge potential traffic disruption')
     q=cmd('status','concise NIC inventory; no traffic sampling');q.add_argument('device',nargs='?');q.add_argument('--all',action='store_true',help='include virtual/loopback interfaces');j(q)
-    q=cmd('check','check NIC topology, IRQs, RSS and sampled drop counters');q.add_argument('device',nargs='?');q.add_argument('--duration',type=float,default=1.0,help='sample time in seconds, 0 disables delta sampling');q.add_argument('--focus',choices=['all','loss','rss','placement','pcie','link'],default='all');q.add_argument('--all',action='store_true');q.add_argument('--strict',action='store_true',help='exit 2 if warnings are detected');j(q)
+    q=cmd('check','check NIC topology, IRQs, RSS and sampled drop counters');q.add_argument('device',nargs='?');q.add_argument('--duration',type=float,default=1.0,help='sample time in seconds, 0 disables delta sampling');q.add_argument('--focus',choices=['all','loss','rss','placement','pcie','link'],default='all');q.add_argument('--all',action='store_true');q.add_argument('--traffic-source',choices=['auto','phy','vport','netdev'],default='auto',help='traffic counter domain; auto prefers PHY, then complete vPort, then netdev');q.add_argument('--strict',action='store_true',help='exit 2 if warnings are detected');j(q)
     q=cmd('explain','explain the observed packet path for an interface');q.add_argument('device');j(q)
     q=cmd('optimize','preview NUMA/physical-core-aware IRQ affinity mapping');q.add_argument('device',nargs='?');q.add_argument('--goal',choices=['balanced','max-pps','max-throughput','low-latency','cpu-efficient'],default='balanced');q.add_argument('--cpus',help='explicit ordered IRQ CPU list');q.add_argument('--avoid-cpus',help='exclude CPU list from automatic placement');q.add_argument('--allow-smt',action='store_true',help='permit SMT sibling CPU sharing if required');q.add_argument('--all',action='store_true');q.add_argument('--allow-irqbalance',action='store_true');q.add_argument('--profile-out',metavar='FILE',help='write a compatible, explicit JSON IRQ profile');apply(q);j(q)
     q=cmd('list','enumerate Linux NICs'); j(q)
@@ -24,7 +24,7 @@ def parser_build():
     q=cmd('rps','show/disable RPS for all RX queues');q.add_argument('device');q.add_argument('--disable',action='store_true');apply(q);j(q)
     q=cmd('xps','show/set XPS CPU mapping for TX queues');q.add_argument('device');q.add_argument('--cpus');apply(q);j(q)
     q=cmd('stats','standard + optional vendor counters');q.add_argument('device');q.add_argument('--all',action='store_true');j(q)
-    q=cmd('watch','sample packet and error counter deltas');q.add_argument('device');q.add_argument('--interval',type=float,default=1.0);q.add_argument('--count',type=int,default=5)
+    q=cmd('watch','sample packet and error counter deltas');q.add_argument('device');q.add_argument('--interval',type=float,default=1.0);q.add_argument('--count',type=int,default=5);q.add_argument('--traffic-source',choices=['auto','phy','vport','netdev'],default='auto')
     q=cmd('diagnose','correlate CPU, RSS and sampled drop counters');q.add_argument('device');q.add_argument('--duration',type=float,default=1.0);j(q)
     q=cmd('snapshot','save snapshot or show current state');q.add_argument('action',choices=['save','show']);q.add_argument('file',nargs='?');q.add_argument('--device');q.add_argument('--full',action='store_true')
     q=cmd('diff','compare two JSON snapshots or one snapshot with live host');q.add_argument('before');q.add_argument('after',nargs='?')
@@ -57,7 +57,7 @@ def main(argv=None, system=None):
         if a.json: out_json(data)
         else: print_status(data)
     elif a.command == 'check':
-        data=check_report(s,a.device,a.duration,a.focus,a.all)
+        data=check_report(s,a.device,a.duration,a.focus,a.all,a.traffic_source)
         if a.json: out_json(data)
         else: print_findings(data)
         if a.strict and any(item['severity']=='warning' for item in data['findings']):
@@ -184,15 +184,24 @@ def main(argv=None, system=None):
     elif a.command == 'watch':
         if a.interval<=0 or a.interval>3600 or a.count<1 or a.count>100000:raise DoctorError('invalid watch interval/count')
         prev=s.counters(a.device,True)
-        print('interval  RX-Mpps  TX-Mpps  RX-Gbps  TX-Gbps  drop/error deltas')
+        last=time.monotonic()
+        print('interval  RX rate      TX rate      RX bandwidth  TX bandwidth  counters')
         for _ in range(a.count):
             time.sleep(a.interval)
             curr=s.counters(a.device,True)
+            now=time.monotonic()
+            elapsed=now-last
             delta={k:curr[k]-v for k,v in prev.items() if k in curr and curr[k]>=v}
-            p=lambda key:delta.get(key,0)/a.interval
             hot={k:v for k,v in delta.items() if v>0 and DROP_RE.search(k)}
-            print(f'{a.interval:7g}s  {p("rx_packets")/1e6:7.3f}  {p("tx_packets")/1e6:7.3f}  {p("rx_bytes")*8/1e9:7.3f}  {p("tx_bytes")*8/1e9:7.3f}  {len(hot)} counters')
-            prev=curr
+            rates=traffic_rates(delta,elapsed,a.traffic_source)
+            rx_src=rates['rx_source'] or '-'
+            tx_src=rates['tx_source'] or '-'
+            print(f"{elapsed:7.2f}s  {human_rate(rates['rx_pps'],'pps'):12} "
+                  f"{human_rate(rates['tx_pps'],'pps'):12} "
+                  f"{human_rate(rates['rx_bps'],'bps'):13} "
+                  f"{human_rate(rates['tx_bps'],'bps'):13} "
+                  f"{rx_src if rx_src==tx_src else 'RX:'+rx_src+' TX:'+tx_src}; {len(hot)} error counters")
+            prev,last=curr,now
     elif a.command == 'diagnose':
         if a.duration<0 or a.duration>300:raise DoctorError('--duration must be 0..300s')
         data=diagnose(s,a.device,a.duration)
